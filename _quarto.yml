@@ -1,0 +1,12 @@
+project:
+  title: "final assignment"
+  output-dir: docs
+  type: website
+
+website:
+  title: "final daily assignment"
+
+format:
+  html:
+    self-contained: true
+    theme: cosmo

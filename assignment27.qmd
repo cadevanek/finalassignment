@@ -1,0 +1,227 @@
+---
+title: "assignment27"
+format: html
+---
+```{r}
+# Load required libraries
+library(osmdata)
+library(sf)
+library(dplyr)
+library(terra)
+library(raster)
+library(ggplot2)
+
+fc <- st_as_sf(st_sfc(
+  st_polygon(list(rbind(
+    c(-105.15, 40.50),
+    c(-105.15, 40.65),
+    c(-104.95, 40.65),
+    c(-104.95, 40.50),
+    c(-105.15, 40.50)
+  ))),
+  crs = 4326
+))
+
+foco_rivers <- opq(bbox = st_bbox(fc)) |>
+  add_osm_feature(key = "waterway") |>
+  osmdata_sf()
+
+plot(st_geometry(fc), border = "black")
+if (!is.null(foco_rivers$osm_lines)) {
+  plot(foco_rivers$osm_lines$geometry, add = TRUE, col = "blue")
+} else {
+  warning("no lines returned")
+}
+
+```
+```{r}
+if (!is.null(foco_rivers$osm_lines)) {
+  osm_lines <- foco_rivers$osm_lines
+
+  if (is.list(osm_lines$name)) {
+    osm_lines$name <- sapply(osm_lines$name, function(x) if (is.null(x)) NA else x)
+  }
+
+  poudre_lines <- osm_lines |>
+    filter(name %in% c("Cache la Poudre River", "Cache La Poudre River"))
+
+  poudre_river <- poudre_lines |>
+    st_union() |>
+    st_as_sf()
+
+} else {
+  stop("No river lines returned from OSM")
+}
+if (exists("poudre_river")) {
+  river_length <- st_length(poudre_river)
+  print(river_length)
+} else {
+  warning("poudre object does not exist")
+}
+
+```
+```{r}
+
+
+url <- "https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/main/resources/foco-elev.tif"
+dem <- rast(paste0("/vsicurl/", url))
+
+plot(dem, main = "Fort Collins DEM")
+
+
+
+```
+```{r}
+
+if ("SpatRaster" %in% class(dem)) {
+  dem_crs <- crs(dem)
+} else if ("RasterLayer" %in% class(dem)) {
+  dem_crs <- crs(dem)
+} else {
+  stop("DEM is not valid")
+}
+
+if (exists("poudre_river")) {
+  poudre_river_proj <- st_transform(poudre_river, dem_crs)
+  poudre_pts <- st_cast(poudre_river_proj, "POINT")
+} else {
+  warning("poudre_river not found")
+}
+
+
+```
+```{r}
+if (exists("poudre_pts") && exists("dem")) {
+  coords <- st_coordinates(poudre_pts)
+  cell_ids <- cellFromXY(dem, coords)
+  snapped_coords <- xyFromCell(dem, cell_ids)
+  profile <- extract(dem, snapped_coords)[[1]]
+
+profile_clean <- na.omit(profile)
+
+plot(profile_clean, type = "l",
+     main = "Elevation Profile",
+     ylab = "Elevation (m)", xlab = "River Point Index",
+     xlim = c(1, length(profile_clean)))
+
+  head(profile)
+} else {
+  warning("Missing poudre_pts or dem for extraction.")
+}
+
+
+
+
+
+```
+```{r}
+
+if (exists("poudre_pts") && exists("dem")) {
+
+  if ("SpatRaster" %in% class(dem)) {
+    dem_crs <- terra::crs(dem)
+  } else if ("RasterLayer" %in% class(dem)) {
+    dem_crs <- raster::crs(dem)
+  } else {
+    stop("not valid raster type")
+  }
+
+  poudre_pts_proj <- st_transform(poudre_pts, crs = dem_crs)
+
+} else {
+  warning("Missing data")
+}
+
+```
+```{r}
+if (exists("poudre_pts") && exists("profile")) {
+river_profile <- bind_cols(poudre_pts_proj, elevation = profile)
+
+  river_profile <- mutate(river_profile, ID = 1:nrow(river_profile))
+
+  head(river_profile)
+} else {
+  warning("Missing data")
+}
+
+
+```
+```{r}
+if (exists("river_profile") && exists("river_length")) {
+  
+  start_point <- river_profile[1, ]
+  end_point   <- river_profile[nrow(river_profile), ]
+  
+  straight_line <- st_distance(start_point, end_point)
+  
+  sinuosity <- as.numeric(river_length / straight_line)
+
+  cat("Sinuosity:", round(sinuosity, 3), "\n")
+  
+} else {
+  warning("Missing 'river_profile' or 'river_length'. Cannot compute sinuosity.")
+}
+
+
+```
+##Because this sinuosity is above 1.5, we know that the river tends to meander a lot. According to the map and my knowledge of the river, this would add up.
+```{r}
+if (exists("river_profile") && exists("river_length")) {
+  
+  river_profile_clean <- filter(river_profile, !is.na(elevation))
+
+  if (nrow(river_profile_clean) >= 2) {
+
+    inlet_elev <- river_profile_clean$elevation[1]
+    outlet_elev <- river_profile_clean$elevation[nrow(river_profile_clean)]
+
+    elevation_change_cm <- inlet_elev - outlet_elev
+
+    river_length_m <- units::drop_units(river_length)
+
+    river_length_cm <- river_length_m * 100
+
+    river_slope <- elevation_change_cm / river_length_cm
+
+    cat("River slope:", round(river_slope, 4), "\n")
+    cat("slope:", round(river_slope * 100, 2), "%.\n")
+
+  } else {
+    warning("Not enough points")
+  }
+
+} else {
+  warning("Missing data for slope")
+}
+
+```
+##The river's slope is 0.05%, which means it drops ~50 cm per km.
+
+```{r}
+
+
+river_profile_clean <- river_profile |> dplyr::filter(!is.na(elevation))
+
+ggplot(river_profile_clean, aes(x = ID, y = elevation)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  labs(
+    title = "Elevation Profile Along the Poudre River",
+    x = "River Point ID",
+    y = "Elevation (cm)"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+
+ggplot(river_profile_clean) +
+  geom_sf(aes(color = elevation), size = 0.5) +
+  scale_color_viridis_c(option = "plasma", name = "Elevation (cm)") +
+  labs(
+    title = "Poudre River Profile (Colored by Elevation)",
+    x = "Longitude", y = "Latitude"
+  ) +
+  theme_minimal()
+
+
+```
